@@ -35,6 +35,10 @@ conda-env/
 # ========================================
 *.pdb
 
+# Allow intentionally versioned small test fixtures
+!tests/data/**/*.pdb
+!tests/data/**/*.sc
+
 # ========================================
 # NumPy / generated libraries
 # ========================================
