@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fast_glycan_masking_pipeline_v2"
+version = "0.1.0"
+description = "Fast glycan conformer library generation and glycan masking pipeline"
+requires-python = ">=3.9"
+
+dependencies = [
+    "numpy>=1.23",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
