@@ -30,10 +30,39 @@ def write_multimodel_pdb(path, atoms, coords):
                 )
             fh.write("ENDMDL\n")
 
+def deduplicate_conformers(coords, elements, threshold):
+    """Greedy, order-preserving aligned heavy-atom RMSD deduplication.
+
+    No additional rigid-body fitting is performed. Requires scipy only when used.
+    """
+    from scipy.spatial import cKDTree
+
+    if threshold <= 0:
+        raise ValueError("dedup_rmsd must be > 0 Angstrom")
+    heavy = np.array([str(e).strip().upper() not in ("H", "D") for e in elements])
+    if not heavy.any():
+        raise ValueError("No heavy glycan atoms available for RMSD deduplication")
+    xyz = np.asarray(coords, dtype=np.float64)[:, heavy, :]
+    flat = np.ascontiguousarray(xyz.reshape(len(xyz), -1))
+    tree = cKDTree(flat)
+    radius = float(threshold) * np.sqrt(int(heavy.sum()))
+    removed = np.zeros(len(flat), dtype=bool)
+    keep = []
+    # A kept representative removes later conformers within the RMSD cutoff.
+    for i in range(len(flat)):
+        if removed[i]:
+            continue
+        keep.append(i)
+        for j in tree.query_ball_point(flat[i], radius, workers=1):
+            if j > i:
+                removed[j] = True
+    return np.asarray(keep, dtype=int)
+
+
 def build_library(input_dir, out_prefix, reu_delta=0.0, include_wt_glycans=False,
                   native_positions=None, samples_per_glycan=0, seed=2026,
                   attachment_sigma_deg=20.0, glycosidic_sigma_deg=20.0,
-                  max_library_size=None, write_pdb=False, strict=False):
+                  max_library_size=None, write_pdb=False, strict=False, dedup_rmsd=None):
     """Build an empirical glycan library from a ``pos_*`` Rosetta dataset.
 
     Each selected source model may contribute one or more ASN-linked glycans.
@@ -122,10 +151,29 @@ def build_library(input_dir, out_prefix, reu_delta=0.0, include_wt_glycans=False
         raise RuntimeError("No glycans were successfully extracted")
 
     coords=np.asarray(coords,float)
+    n_before_dedup = len(coords)
+    if dedup_rmsd is not None:
+        elements_for_dedup = np.array([a.element for a in canonical_atoms])
+        keep = deduplicate_conformers(coords, elements_for_dedup, dedup_rmsd)
+        # Parent indices refer to the pre-dedup conformer array.
+        old_to_new = {int(old): new for new, old in enumerate(keep)}
+        coords = coords[keep]
+        provenance = [provenance[i].copy() for i in keep]
+        for record in provenance:
+            parent = int(record["parent_empirical_index"])
+            # -1 means the empirical parent was deduplicated away.
+            record["parent_empirical_index"] = old_to_new.get(parent, -1)
+    n_after_dedup = len(coords)
     if max_library_size is not None and len(coords)>max_library_size:
         keep=np.sort(rng.choice(len(coords),size=max_library_size,replace=False))
         coords=coords[keep]
         provenance=[provenance[i] for i in keep]
+        # Remap parent indices once more after optional downsampling.
+        old_to_new = {int(old): new for new, old in enumerate(keep)}
+        for record in provenance:
+            record["parent_empirical_index"] = old_to_new.get(
+                int(record["parent_empirical_index"]), -1
+            )
 
     atom_names=np.array([a.name for a in canonical_atoms])
     residue_numbers=np.array([a.resid for a in canonical_atoms],int)
@@ -182,6 +230,10 @@ def build_library(input_dir, out_prefix, reu_delta=0.0, include_wt_glycans=False
         attachment_sigma_deg=attachment_sigma_deg,
         glycosidic_sigma_deg=glycosidic_sigma_deg,
         failed_pdbs=len(failures), seed=seed,
+        dedup_rmsd=dedup_rmsd,
+        conformers_before_dedup=n_before_dedup,
+        conformers_after_dedup=n_after_dedup,
+        duplicates_removed=n_before_dedup-n_after_dedup,
     )
     Path(str(out)+"_manifest.json").write_text(json.dumps(manifest,indent=2)+"\n")
     if failures:

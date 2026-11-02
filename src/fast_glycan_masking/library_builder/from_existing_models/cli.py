@@ -34,6 +34,8 @@ def parser():
     b.add_argument("--attachment-sigma-deg",type=float,default=20.0)
     b.add_argument("--glycosidic-sigma-deg",type=float,default=20.0)
     b.add_argument("--max-library-size",type=int,default=None)
+    b.add_argument("--dedup-rmsd",type=float,default=None,
+                   help="remove aligned heavy-atom RMSD near-duplicates (Angstrom); disabled by default")
     b.add_argument("--seed",type=int,default=2026)
     b.add_argument("--write-pdb",action="store_true",
                    help="also write a potentially very large multi-model PDB")
@@ -55,7 +57,7 @@ def main(argv=None):
                 args.input_dir,args.out_prefix,args.reu_delta,args.include_wt_glycans,
                 parse_positions(args.native_positions),args.samples_per_glycan,args.seed,
                 args.attachment_sigma_deg,args.glycosidic_sigma_deg,
-                args.max_library_size,args.write_pdb,args.strict
+                args.max_library_size,args.write_pdb,args.strict,args.dedup_rmsd
             )
             print(f"[done] library: {args.out_prefix}.npz")
             print(f"[done] conformers: {m['empirical_and_expanded_conformers']}")

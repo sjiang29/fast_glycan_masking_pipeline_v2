@@ -108,7 +108,16 @@ def save_outputs(vectors, labels, prefix, tag):
     return {**angular_stats(u),**occ}
 
 
-def analyze_library(path,prefix):
+def choose_indices(total, n_conformers, seed):
+    """Select a reproducible subset, or all conformers when n is omitted."""
+    if n_conformers is None:
+        return np.arange(total)
+    if n_conformers > total:
+        raise ValueError(f"Requested {n_conformers} conformers, but only {total} are available")
+    return np.sort(np.random.default_rng(seed).choice(total, size=n_conformers, replace=False))
+
+
+def analyze_library(path,prefix,n_conformers=None,seed=2026):
     """Analyze root and whole-glycan orientation distributions in an NPZ library."""
     with np.load(path,allow_pickle=False) as z:
         c=np.asarray(z["coords"],float)
@@ -116,17 +125,22 @@ def analyze_library(path,prefix):
         names=np.asarray(z["atom_names"]).astype(str)
         resids=np.asarray(z["residue_numbers"],int)
     if c.ndim!=3: raise ValueError(f"Library coords should be (N,A,3), got {c.shape}")
+    n_available=len(c)
+    indices=choose_indices(n_available,n_conformers,seed)
+    c=c[indices]
     nd2=frame[2]
-    result={"input_type":"library","library":str(Path(path).resolve())}
-    result["whole_glycan"]=save_outputs(c.mean(1)-nd2,np.arange(len(c)),prefix,"center")
+    result={"input_type":"library","library":str(Path(path).resolve()),
+            "n_available":int(n_available),
+            "n_analyzed":int(len(indices)),"seed":seed if n_conformers is not None else None}
+    result["whole_glycan"]=save_outputs(c.mean(1)-nd2,indices,prefix,"center")
     root=resids[0]
     hits=np.where((resids==root)&(names=="C1"))[0]
     if len(hits):
-        result["root_c1"]=save_outputs(c[:,hits[0],:]-nd2,np.arange(len(c)),prefix,"root")
+        result["root_c1"]=save_outputs(c[:,hits[0],:]-nd2,indices,prefix,"root")
     return result
 
 
-def analyze_placed(path,protein,site,prefix):
+def analyze_placed(path,protein,site,prefix,n_conformers=None,seed=2026):
     """Analyze directional diversity of glycans written by the placement module."""
     chain,resid=site; nd2=nd2_from_pdb(protein,chain,resid)
     with np.load(path,allow_pickle=False) as z:
@@ -138,9 +152,12 @@ def analyze_placed(path,protein,site,prefix):
     hit=np.where(labels==wanted)[0]
     if len(hit)!=1: raise ValueError(f"{wanted} not uniquely found; sites={labels.tolist()}")
     si=int(hit[0]); sc=c[:,si,:,:]
-    model_labels=selected[:,si] if selected is not None else np.arange(len(sc))
+    indices=choose_indices(len(sc),n_conformers,seed)
+    model_labels=selected[indices,si] if selected is not None else indices
+    sc=sc[indices]
     return {"input_type":"placed","placed":str(Path(path).resolve()),"site":f"{chain}:{resid}",
-            "whole_glycan":save_outputs(sc.mean(1)-nd2,model_labels,prefix,"placed")}
+            "n_analyzed":int(len(indices)),"seed":seed if n_conformers is not None else None,
+             "whole_glycan":save_outputs(sc.mean(1)-nd2,model_labels,prefix,"placed")}
 
 
 def main():
@@ -149,12 +166,18 @@ def main():
     g.add_argument("--library"); g.add_argument("--placed")
     ap.add_argument("--protein"); ap.add_argument("--site",type=parse_site)
     ap.add_argument("--out-prefix",required=True)
+    ap.add_argument("--n-conformers",type=int,default=None,
+                    help="Randomly sample this many conformers (default: all)")
+    ap.add_argument("--seed",type=int,default=2026,
+                    help="Random seed for reproducible subsampling (default: 2026)")
     a=ap.parse_args()
+    if a.n_conformers is not None and a.n_conformers < 1:
+        ap.error("--n-conformers must be a positive integer")
     Path(a.out_prefix).parent.mkdir(parents=True,exist_ok=True)
-    if a.library: summary=analyze_library(a.library,a.out_prefix)
+    if a.library: summary=analyze_library(a.library,a.out_prefix,a.n_conformers,a.seed)
     else:
         if not a.protein or not a.site: ap.error("--placed requires --protein and --site")
-        summary=analyze_placed(a.placed,a.protein,a.site,a.out_prefix)
+        summary=analyze_placed(a.placed,a.protein,a.site,a.out_prefix,a.n_conformers,a.seed)
     out=f"{a.out_prefix}_orientation_summary.json"
     Path(out).write_text(json.dumps(summary,indent=2)+"\n")
     print(json.dumps(summary,indent=2)); print(f"[done] {out}")
